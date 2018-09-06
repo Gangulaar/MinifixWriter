@@ -3,10 +3,12 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
+import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.util.Arrays;
 import java.util.Date;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -23,8 +25,6 @@ public class MinifixWriter
 	private final String NewOrder = "NewOrderSingle"; 
 	private final String Exec = "ExecutionReport";
 	private final String Send = "Send";
-	@SuppressWarnings("unused")
-	private final String Expect = "Expect";
 	private final String Colon = ":";
 	private final String Wait = "wait";
 	private final String LastIn = "$LASTIN";
@@ -48,6 +48,8 @@ public class MinifixWriter
 	static FIXHandler trans;
 	String SP;
 	final DateTimeFormatter formatter;
+	HolidayCalenderReader hcr;
+	Boolean dateChanged;
 	MinifixWriter()
 	{
 		diff =0;
@@ -56,6 +58,9 @@ public class MinifixWriter
 		response = new FIXHandler();
 		execution = new FIXHandler();
 		formatter = DateTimeFormatter.ofPattern("yyyyMMdd");
+		hcr = new HolidayCalenderReader();
+		hcr.mapHolidays();
+		dateChanged = false;
 	}
 	public static void main(String arg[])
 	{
@@ -71,13 +76,15 @@ public class MinifixWriter
 			mw.execManipulator();
 			mw.WriteInbound();
 			mw.WriteOutbound();
+			System.out.println("Done");
 		}
 		else
 		{
 			System.out.println("Invalid input");
 			System.exit(0);
 		}
-		//System.out.println(new MinifixWriter().getFutureDates("20180830",2));
+		/*MinifixWriter mw = new MinifixWriter();
+		System.out.println("Final Date: "+mw.reCaluculateDate(mw.getFutureDates("20180902",2),"USD/EUR"));*/
 	}
 	public void writeFiles (String inputFile,String tags)
 	{
@@ -121,7 +128,7 @@ public class MinifixWriter
 	{
 		QuoteResponse = response.cleanMessage(QuoteResponse);
 		response.splitMesage(QuoteResponse);
-		TradeDate = getLatestDate(response.getValueForKey("52"),response.getValueForKey("64"));
+		TradeDate = getLatestDate(response.getValueForKey("52"),response.getValueForKey("64"),response.getValueForKey("55"));
 		QuoteResponse= removeTags(QuoteResponse,response,"8","9","10","56","49","52","34","10");
 		QuoteResponse =changeTags(QuoteResponse,response,"131="+getLastIn("R","131"),"64="+TradeDate);
 	}
@@ -170,23 +177,6 @@ public class MinifixWriter
 	{
 		return Lastout+"["+TranType+","+key+"]";
 	}
-	@SuppressWarnings("unused")
-	private String convertTimeToDate(String Time)
-	{
-		try
-		{
-			
-			Date date = new SimpleDateFormat("yyyyMMdd-HH:mm:ss").parse(Time);
-			String newDate = new SimpleDateFormat("yyyyMMdd").format(date);
-			//System.out.println(newDate);
-			return newDate;
-		}
-		catch(Exception e)
-		{
-			e.printStackTrace();
-		}
-		return null;
-	}
 	private String getPresentDate()
 	{
 		return LocalDate.now().format(formatter);		
@@ -199,10 +189,70 @@ public class MinifixWriter
 	{
 		return LocalDate.parse(PresentDate, formatter).plusDays(additionalDates).format(formatter);
 	}
-	private String getLatestDate(String SendingTime,String SettlementTime)
+	private String getLatestDate(String SendingTime,String SettlementTime,String Currency)
 	{
 		diff = getDateDifference(LocalDate.parse(SendingTime, DateTimeFormatter.ofPattern("yyyyMMdd-HH:mm:ss")).format(formatter),SettlementTime);
-		return getFutureDates(getPresentDate(),diff);
+		return reCaluculateDate(getFutureDates(getPresentDate(),diff),Currency);
+	}
+	private String reCaluculateDate(String Date,String Currency) 
+	{
+		Date = checkForHolidays(Date,Currency);
+		Date = checkForWeekends(Date);
+		if(dateChanged)
+		{
+			dateChanged = false;
+			Date = reCaluculateDate(Date,Currency);
+		}
+		return Date;
+	}
+	private String checkForHolidays (String Date,String CurrencyPairs) 
+	{
+		String setOfCurrencies = hcr.getCurrencyHoliday(Date);
+		String FinalDate = Date;
+		if(setOfCurrencies.equals(null))
+		{
+			String allCurrency[] = setOfCurrencies.split(",");	
+			String CurrPairs[] = CurrencyPairs.split("/");
+			for(String BaseOrTerm : CurrPairs)
+			{
+				if(Arrays.asList(allCurrency).contains(BaseOrTerm))
+				{
+					FinalDate = getFutureDates(Date,1);
+					System.out.println("Holiday");
+					dateChanged = true;
+				}
+			}
+		}
+		return FinalDate;
+	}
+	private String checkForWeekends (String GivenDate) 
+	{
+		String day = null; 
+		String FinalDate = GivenDate;
+		try 
+		{
+			Date givenDateFormat = new SimpleDateFormat("yyyyMMdd").parse(GivenDate);
+			SimpleDateFormat DayFormat = new SimpleDateFormat("E");
+			day = DayFormat.format(givenDateFormat);
+			if(day.equals("Sun"))
+			{
+				dateChanged = true;
+				System.out.println("Sunday");
+				FinalDate = getFutureDates(GivenDate,1);
+			}			
+			else if(day.equals("Sat"))
+			{
+				System.out.println("Saturday");
+				dateChanged = true;
+				FinalDate= getFutureDates(GivenDate,2);
+			}
+		} 
+		catch (ParseException e) 
+		{
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} 
+		return FinalDate;
 	}
 	
 }
